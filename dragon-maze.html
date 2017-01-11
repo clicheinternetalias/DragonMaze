@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf8">
+<title>Maze Generator</title>
+<!--
+Inspired by Dragon Maze Erase for the Apple 2.
+        Added: key, princess, teleports, multiple dragons, and images
+        Removed: erasing the maze from view, dragons jumping the walls
+        Changed: maze generation algorithm (old one was pure random and slow)
+
+TODO:
+treasures - optional acquisitions
+multiple princesses?
+options:
+	have princess / number of princesses
+	need key
+	number of treasures
+-->
+<style type="text/css">
+
+body { background-color: #f0e0d0; }
+#options { margin-left: 2em; }
+#optionsform {
+  padding: .5em;
+  border: 1px solid black;
+  background-color: #EEE;
+  border-spacing: .5em 0;
+}
+
+#box {}
+#maze {
+  background-color: white;
+  border-spacing: 0 0;
+}
+.mcell { padding: 0; }
+.wallrow { height:  6px; }
+.pathrow { height: 16px; }
+.wallcol { width :  6px; }
+.pathcol { width : 16px; }
+.xwall { background: black; }
+.hwall { background: black; }
+.vwall { background: black; }
+.hpath { background: white; }
+.vpath { background: white; }
+.xpath { background: white; }
+.exit { background-image: url("img/door.png"); }
+
+</style>
+<script type="text/javascript">
+
+function getArrowKey(evt)
+{
+  evt = (evt || window.event || null);
+  if (evt) {
+    switch (evt.keyCode) {
+    case 37: return "L";
+    case 38: return "U";
+    case 39: return "R";
+    case 40: return "D";
+    }
+  }
+  return "";
+}
+
+function randomInt(max)
+{
+  return Math.floor(Math.random() * max);
+}
+
+if (!Array.prototype.shuffle) {
+  Array.prototype.shuffle = function Array_prototype_shuffle () {
+    var rv = this.slice();
+    var i = rv.length;
+    while (i) {
+      var j = parseInt(Math.random() * i);
+      var tmp = rv[--i];
+      rv[i] = rv[j];
+      rv[j] = tmp;
+    }
+    return rv;
+  };
+}
+
+function Point(x,y)
+{
+  this.x = x;
+  this.y = y;
+}
+Point.prototype = {
+
+dup : function ()
+{
+  return new Point(this.x, this.y);
+},
+isNextTo : function (pt)
+{
+  if (this.x == pt.x) return this.y + 1 == pt.y || this.y - 1 == pt.y;
+  if (this.y == pt.y) return this.x + 1 == pt.x || this.x - 1 == pt.x;
+  return false;
+},
+isEqual : function (pt)
+{
+  return (this.x === pt.x) && (this.y === pt.y);
+}
+}; /* Point.prototype */
+
+function Maze(columns, rows, braids)
+{
+  this.columns = columns;
+  this.rows    = rows;
+  this.braids  = braids;
+  this.start   = new Point(0, 0);
+  this.end     = new Point(this.columns-1, this.rows-1);
+  this.table   = null;
+
+  this.cells = [];
+  for (var x = 0; x < this.columns; ++x) {
+    this.cells[x] = new Array(this.rows);
+    for (var y = 0; y < this.rows; ++y) {
+      this.cells[x][y] = {
+        visited: false,
+        wall: {
+          "U": true,
+          "D": true,
+          "L": true,
+          "R": true
+        }
+      };
+    }
+  }
+  this.setWall(this.start, "L", false);
+  this.setWall(this.end,   "R", false);
+}
+Maze.prototype = {
+
+dirs   : [ "U", "D", "L", "R" ], // direction of neighbors
+undirs : { "U":"D", "D":"U", "L":"R", "R":"L" }, // opposite direction
+delta  : { // offsets of neighbors
+  "U": { x:  0, y: -1 },
+  "D": { x:  0, y:  1 },
+  "L": { x: -1, y:  0 },
+  "R": { x:  1, y:  0 }
+},
+
+setEntrance : function (y)
+{
+  this.setWall(this.start, "L", true);
+  this.start.x = 0;
+  this.start.y = y;
+  this.setWall(this.start, "L", false);
+},
+setExit : function (y)
+{
+  this.setWall(this.end, "R", true);
+  this.end.x = this.columns-1;
+  this.end.y = y;
+  this.setWall(this.end, "R", false);
+},
+canGo : function (pt, dir)
+{
+  return (!this.cells[pt.x][pt.y].wall[dir]);
+},
+getVisited : function (pt)
+{
+  return this.cells[pt.x][pt.y].visited;
+},
+setVisited : function (pt, val)
+{
+  return this.cells[pt.x][pt.y].visited = val;
+},
+getWall : function (pt, dir)
+{
+  return this.cells[pt.x][pt.y].wall[dir];
+},
+setWall : function (pt, dir, val)
+{
+  return this.cells[pt.x][pt.y].wall[dir] = val;
+},
+getNeighborPoint : function (pt, dir)
+{
+  var rv = new Point(pt.x + this.delta[dir].x,
+                     pt.y + this.delta[dir].y);
+
+  if (rv.x >= 0 && rv.y >= 0 && rv.x < this.columns && rv.y < this.rows)
+    return rv;
+  return null;
+},
+
+/* Depth-First Search algorithm */
+createMaze : function ()
+{
+  var stack = [
+    {
+      pt: new Point(Math.floor(Math.random() * this.columns),
+                    Math.floor(Math.random() * this.rows)),
+      neighbors: this.dirs.shuffle()
+    }
+  ];
+  var visitedCount = 0;
+
+  while (visitedCount < this.rows * this.columns) {
+
+    var cell = stack[stack.length-1];
+    var pt = cell.pt;
+    var neighbors = cell.neighbors;
+
+    /* when all cells have been visited at least once, it's done */
+    if (!this.getVisited(pt)) {
+      this.setVisited(pt, true);
+      ++visitedCount;
+    }
+
+    /* look for a neighbor that is in the maze and hasn't been visited yet */
+    while (neighbors.length > 0) {
+      var dir = neighbors.pop();
+      if (neighbors.length == 0) stack.pop();
+
+      var d = this.getNeighborPoint(pt, dir);
+
+      if (d && !this.getVisited(d)) {
+
+        /* Break down the wall between them. The new neighbor
+         * is pushed onto the stack and becomes the new current cell.
+         */
+        this.setWall(pt, dir, false);
+        this.setWall(d, this.undirs[dir], false);
+        stack.push({ pt: d, neighbors: this.dirs.shuffle() });
+        break;
+      }
+    }
+  }
+  this.addBraids(this.braids);
+},
+
+/* Find dead-ends and knock down walls. */
+addBraids : function (braids)
+{
+  if (!braids) return;
+
+  var pt = new Point(0, 0);
+
+  for (pt.y = 0; pt.y < this.rows; ++pt.y) {
+    for (pt.x = 0; pt.x < this.columns; ++pt.x) {
+
+      var exits = 0;
+      if (!this.getWall(pt, "U")) exits++;
+      if (!this.getWall(pt, "D")) exits++;
+      if (!this.getWall(pt, "L")) exits++;
+      if (!this.getWall(pt, "R")) exits++;
+
+      if (exits == 1 && randomInt(100) < braids) {
+
+        var neighbors = this.dirs.shuffle();
+        while (neighbors.length) {
+          var dir = neighbors.pop();
+
+          if (this.getWall(pt, dir)) {
+
+            var d = this.getNeighborPoint(pt, dir);
+            if (d) {
+              this.setWall(pt, dir, false);
+              this.setWall(d, this.undirs[dir], false);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+},
+
+openDoor : function ()
+{
+  var list = document.getElementsByClassName("exit");
+  if (list[0]) list[0].className = list[0].className.replace(" exit", "");
+},
+
+getDomWallNode : function (pt, dir)
+{
+  if (!this.table) return null;
+
+  var d = new Point((pt.x * 2) + 1, (pt.y * 2) + 1);
+
+  d.x += this.delta[dir].x;
+  d.y += this.delta[dir].y;
+
+  return this.table.childNodes[d.y].childNodes[d.x];
+},
+toDomNode : function ()
+{
+  var self = this;
+  var kinds = {
+    "wallrow": { /*  path ,   wall */
+      "wallcol": [ "xwall", "xwall" ],
+      "pathcol": [ "hpath", "hwall" ]
+    },
+    "pathrow": {
+      "wallcol": [ "vpath", "vwall" ],
+      "pathcol": [ "xpath", "xpath" ]
+    }
+  };
+
+  function appendTD(row, rowClass, cellClass, pt, isWall)
+  {
+    var td = document.createElement("td");
+    td.className = cellClass
+                 + " mcell "
+                 + kinds[rowClass][cellClass][+isWall];
+
+    if (rowClass == "pathrow" && cellClass == "pathcol")
+      td.id = "maze-" + pt.x + "-" + pt.y;
+
+    td.appendChild(document.createElement("div"));
+    row.appendChild(td);
+    return td;
+  }
+  function appendTR(table, pt, rowClass, f0, f1, f2)
+  {
+    var row = document.createElement("tr");
+    row.className = rowClass;
+
+    for (pt.x = 0; pt.x < self.columns; ++pt.x) {
+      appendTD(row, rowClass, "wallcol", pt, f0(pt));
+      appendTD(row, rowClass, "pathcol", pt, f1(pt));
+    }
+    pt.x--;
+    var td = appendTD(row, rowClass, "wallcol", pt, f2(pt));
+    if (rowClass == "pathrow" && pt.isEqual(self.end))
+      td.className += " exit";
+    table.appendChild(row);
+    return row;
+  }
+  function appendTRabove(table, y)
+  {
+    return appendTR(table, pt, "wallrow",
+        function (pt) { return true; },
+        function (pt) { return self.getWall(pt, "U"); },
+        function (pt) { return true; });
+  }
+  function appendTRpath(table, y)
+  {
+    return appendTR(table, pt, "pathrow",
+        function (pt) { return self.getWall(pt, "L"); },
+        function (pt) { return false; },
+        function (pt) { return self.getWall(pt, "R"); });
+  }
+  function appendTRbelow(table, pt)
+  {
+    return appendTR(table, pt, "wallrow",
+        function (pt) { return true; },
+        function (pt) { return self.getWall(pt, "D"); },
+        function (pt) { return true; });
+  }
+
+  this.table = document.createElement("table");
+  this.table.setAttribute("id", "maze");
+
+  var pt = new Point(0,0);
+
+  for (pt.y = 0; pt.y < this.rows; ++pt.y) {
+    appendTRabove(this.table, pt);
+    appendTRpath(this.table, pt);
+  }
+  pt.y--;
+  appendTRbelow(this.table, pt);
+
+  return this.table;
+}
+}; /* Maze.prototype */
+
+function Sprite(img,pt)
+{
+  this.img = img;
+  this.pt = (pt != null ? pt : new Point());
+}
+Sprite.prototype = {
+
+isNextTo : function (pt)
+{
+  return this.pt.isNextTo(pt);
+},
+inSameLocation : function (g)
+{
+  return this.pt.isEqual(g.pt);
+},
+atLocation : function (pt)
+{
+  return this.pt.isEqual(pt);
+},
+draw : function (img)
+{
+  if (this.pt.x == null || this.pt.y == null) return;
+  document.getElementById("maze-" + this.pt.x + "-" + this.pt.y)
+          .style
+          .backgroundImage = (img ? "url(" + img + ")" : "");
+},
+moveTo : function (pt)
+{
+  this.draw();
+  this.pt = pt;
+  this.draw(this.img);
+},
+isToTheXOf : function (pt, dir)
+{
+  switch (dir) {
+  case "L": return (this.pt.x < pt.x);
+  case "R": return (this.pt.x > pt.x);
+  case "U": return (this.pt.y < pt.y);
+  case "D": return (this.pt.y > pt.y);
+  }
+  return false;
+}
+}; /* Sprite.prototype */
+
+var gMaze;
+
+var gHaveKey;
+var gWon;
+var gEaten;
+var gHavePrincess;
+var gPrincessHasKey;
+var gPrincessWon;
+
+var gPlayer;
+var gKey;
+var gPrincess;
+var gTeleport;
+var gDragon;
+
+var gPrincessPrev;
+
+function movePrincess()
+{
+  if (gPrincess.atLocation(gMaze.end) && gPrincessHasKey) {
+    if (!gPrincessWon) {
+      gMaze.openDoor();
+      gPrincess.moveTo(new Point());
+      gPrincessWon = true;
+    }
+    return;
+  }
+  if (gPrincessWon || gHavePrincess) return;
+
+  var pt, pt2;
+
+  /* prefer moving somewhere we haven't visited yet (pt)
+   * if we can't do that, move in any direction (pt2)
+   */
+  var neighbors = gMaze.dirs.shuffle();
+  while (neighbors.length > 0) {
+    var dir = neighbors.pop();
+
+    if (gMaze.canGo(gPrincess.pt, dir)) {
+      var tmp = gMaze.getNeighborPoint(gPrincess.pt, dir);
+      if (tmp) {
+        var badmove = false;
+        for (var i = 0; i < gDragon.length && !badmove; ++i) {
+          badmove = gDragon[i].atLocation(tmp);
+        }
+        if (!badmove) pt2 = tmp;
+      }
+    }
+    if (pt2 && !pt2.isEqual(gPrincessPrev)) {
+      pt = pt2;
+    }
+  }
+
+  if (!pt) pt = pt2;
+  if (pt) {
+    gPrincessPrev = gPrincess.pt;
+    gPrincess.moveTo(pt);
+  }
+
+  checkTeleport(gPrincess);
+  if (gPrincess.inSameLocation(gPlayer)) {
+    gHavePrincess = true;
+    gPrincess.pt = new Point();
+    gPlayer.moveTo(gPlayer.pt);
+  }
+  if (gPrincess.inSameLocation(gKey)) {
+    gHaveKey = true;
+    gPrincessHasKey = true;
+    gKey.pt = new Point();
+  }
+}
+
+function moveDragons()
+{
+  for (var i = 0; i < gDragon.length; ++i) {
+    var dragon = gDragon[i];
+    var pt = undefined, pt2 = undefined;
+
+    /* prefer moving toward the player (pt)
+     * if we can't do that, move in any direction (pt2)
+     */
+    var neighbors = gMaze.dirs.shuffle();
+    while (neighbors.length) {
+      var dir = neighbors.pop();
+
+      /* getNeighborPoint prevents the dragon from going out the exits */
+      if (gMaze.canGo(dragon.pt, dir)) {
+        var tmp = gMaze.getNeighborPoint(dragon.pt, dir);
+        if (tmp) {
+          var badmove = gPrincess.atLocation(tmp) || gKey.atLocation(tmp);
+          for (var j = 0; j < gDragon.length && !badmove; ++j) {
+            badmove = gDragon[j].atLocation(tmp);
+          }
+          if (!badmove) pt2 = tmp;
+        }
+      }
+      if (dragon.isToTheXOf(gPlayer.pt, gMaze.undirs[dir])) {
+        pt = pt2;
+        if (pt) break;
+      }
+    }
+    if (!pt) pt = pt2;
+    if (pt) dragon.moveTo(pt);
+
+    checkTeleport(dragon);
+    if (dragon.inSameLocation(gPlayer)) {
+      gEaten = true;
+      return;
+    }
+  }
+}
+
+function movePlayer(e)
+{
+  if (gEaten || gWon) return;
+
+  var dir = getArrowKey(e);
+  if (!dir) return;
+
+  if (gPlayer.atLocation(gMaze.end) && dir == "R") {
+    gWon = (gHavePrincess || gPrincessWon) && gHaveKey;
+    if (gWon) {
+      gMaze.openDoor();
+      gPlayer.moveTo(new Point());
+    }
+    return;
+  }
+
+  if (gMaze.canGo(gPlayer.pt, dir)) {
+    var pt = gMaze.getNeighborPoint(gPlayer.pt, dir);
+    if (pt) gPlayer.moveTo(pt);
+  }
+
+  checkTeleport(gPlayer);
+
+  for (var i = 0; i < gDragon.length; ++i) {
+    if (gPlayer.inSameLocation(gDragon[i])) {
+      gEaten = true;
+      gDragon[i].moveTo(gDragon[i].pt);
+      return;
+    }
+  }
+  if (gPlayer.inSameLocation(gPrincess)) {
+    gHavePrincess = true;
+    gPrincess.pt = new Point();
+  }
+  if (gPlayer.inSameLocation(gKey)) {
+    gHaveKey = true;
+    gKey.pt = new Point();
+  }
+
+  movePrincess();
+  moveDragons();
+}
+
+function randomizeLocation(obj)
+{
+  var pt = new Point();
+
+  /* don't place one object on top of another */
+  do {
+    var i;
+    pt.x = randomInt(gMaze.columns);
+    pt.y = randomInt(gMaze.rows);
+
+    var same = gPlayer.atLocation(pt) ||
+               gPrincess.atLocation(pt) ||
+               gKey.atLocation(pt);
+    for (i = 0; i < gDragon.length && !same; ++i) {
+      same = gDragon[i].atLocation(pt);
+      if (!same && obj == gPlayer) /* don't place player in harm's way */
+        same = gDragon[i].isNextTo(pt);
+    }
+    for (i = 0; i < gTeleport.length && !same; ++i)
+      same = gTeleport[i].atLocation(pt);
+
+  } while (same);
+  obj.moveTo(pt);
+}
+
+function checkTeleport(obj)
+{
+  for (var i = 0; i < gTeleport.length; ++i) {
+    if (obj.inSameLocation(gTeleport[i])) {
+      randomizeLocation(gTeleport[i]);
+      randomizeLocation(obj);
+      break;
+    }
+  }
+}
+
+function Init()
+{
+  var i;
+  var box = document.getElementById("box");
+  while (box.firstChild) box.removeChild(box.firstChild);
+
+  var cols = parseInt(document.getElementById("cols").value, 10);
+  var rows = parseInt(document.getElementById("rows").value, 10);
+  var braid = parseInt(document.getElementById("braid").value, 10);
+  var dragons = parseInt(document.getElementById("dragons").value, 10);
+  var teleports = parseInt(document.getElementById("teleports").value, 10);
+
+  gMaze = new Maze(cols, rows, braid);
+  gMaze.setEntrance(randomInt(gMaze.rows));
+  gMaze.setExit(randomInt(gMaze.rows));
+  gMaze.createMaze();
+  box.appendChild(gMaze.toDomNode());
+
+  gHavePrincess = false;
+  gEaten = false;
+  gWon = false;
+  gHaveKey = false;
+  gPrincessHasKey = false;
+  gPrincessWon = false;
+
+  gPrincessPrev = new Point();
+
+  gPlayer = new Sprite("img/player.png");
+  gKey = new Sprite("img/key.png");
+  gPrincess = new Sprite("img/princess.png");
+  gTeleport = [];
+  for (i = 0; i < teleports; ++i)
+    gTeleport[i] = new Sprite("img/teleport.png");
+  gDragon = [];
+  for (i = 0; i < dragons; ++i)
+    gDragon[i] = new Sprite("img/dragon.png");
+
+  if (gDragon[0]) gDragon[0].moveTo(gMaze.end.dup());
+  gPlayer.moveTo(gMaze.start.dup());
+
+  for (i = 1; i < gDragon.length; ++i)
+    randomizeLocation(gDragon[i]);
+  for (i = 0; i < gTeleport.length; ++i)
+    randomizeLocation(gTeleport[i]);
+  randomizeLocation(gPrincess);
+  randomizeLocation(gKey);
+
+  document.onkeyup = movePlayer;
+}
+
+</script>
+</head>
+<body onLoad="Init()">
+
+<table id="game" align="center">
+<tr>
+<td valign="top">
+
+  <div id="box"></div>
+
+</td>
+<td valign="top">
+
+  <div id="options">
+    <form action="javascript:void(0)">
+      <table id="optionsform">
+        <tr>
+          <td>Width:</td>
+          <td><input id="cols" size="4" value="15" name="cols" type="text"></td>
+        </tr>
+        <tr>
+          <td>Height:</td>
+          <td><input id="rows" size="4" value="15" name="rows" type="text"></td>
+        </tr>
+        <tr>
+          <td>Braiding:</td>
+          <td><input id="braid" size="4" value="50" name="braid" type="text"> (0-100%)</td>
+        </tr>
+        <tr>
+          <td>Dragons:</td>
+          <td><input id="dragons" size="4" value="2" name="dragons" type="text"></td>
+        </tr>
+        <tr>
+          <td>Teleports:</td>
+          <td><input id="teleports" size="4" value="4" name="teleports" type="text"></td>
+        </tr>
+        <tr>
+          <td colspan="2">
+            <button name="bld" onclick="Init()">New Game</button>
+          </td>
+        </tr>
+      </table>
+    </form>
+  </div>
+
+</td>
+</tr>
+</table>
+
+</body>
+</html>
